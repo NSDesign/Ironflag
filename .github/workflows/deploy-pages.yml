@@ -29,6 +29,8 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true   # create/enable the Pages site on first run
 
       - name: Upload site (repo root — the game is plain static files)
         uses: actions/upload-pages-artifact@v3
