@@ -2,7 +2,7 @@
 
 An aerial-view tank capture-the-flag game for the browser. Pure HTML/CSS/JavaScript on a single canvas — no dependencies, no build step.
 
-**Play it:** https://nsdesign.github.io/ironflag/
+**Play it:** https://nsdesign.github.io/Ironflag/
 
 ## The mission
 
