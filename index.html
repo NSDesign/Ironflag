@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#101318">
+<title>IRONFLAG — aerial tank CTF</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<!-- =================== HUD =================== -->
+<div id="hud" aria-hidden="true">
+  <div class="plate" id="plateLeft">
+    <div class="hp-wrap">
+      <div class="hp-label">ARMOR</div>
+      <div class="hp-bar"><div id="hpFill"></div></div>
+    </div>
+    <div id="itemRow"></div>
+  </div>
+
+  <div class="plate" id="plateMid">
+    <div id="hudLevel">LV 1</div>
+    <div id="hudTerrain">CITY</div>
+    <div id="hudScore">
+      <span id="scoreYou" class="flags"></span>
+      <span class="vs">/</span>
+      <span id="scoreFoe" class="flags"></span>
+    </div>
+  </div>
+
+  <div class="plate" id="plateRight">
+    <div class="mini-label">MINES</div>
+    <canvas id="mineHud" width="120" height="34"></canvas>
+  </div>
+</div>
+
+<div id="banner"></div>
+
+<!-- =================== touch controls =================== -->
+<div id="joyZone"></div>
+<div id="joyRing"></div>
+<div id="joyKnob"></div>
+
+<div id="padRight">
+  <button id="btnMine" aria-label="drop mine"><canvas width="132" height="66"></canvas><span>MINE</span></button>
+  <button id="btnMG" aria-label="machine gun"><canvas width="66" height="66"></canvas><span>MG</span></button>
+  <button id="btnFire" aria-label="fire shell"><canvas width="84" height="84"></canvas><span>FIRE</span></button>
+</div>
+
+<!-- =================== overlay screens =================== -->
+<div id="overlay">
+  <div class="crate" id="screenMenu">
+    <div class="stencil-top">FIELD ORDNANCE · No. 07-CTF</div>
+    <h1>IRON<span>FLAG</span></h1>
+    <p class="sub">AERIAL TANK · CAPTURE THE FLAG</p>
+    <p class="brief">Steal the red flag from the far base and haul it home to your green pad.
+       Three enemy captures and the field is lost. Mud bogs, wire drags, hedgehogs stop you dead —
+       and cracked walls come down under shellfire.</p>
+
+    <div class="diff-row" role="group" aria-label="difficulty">
+      <button class="diff" data-d="0"><b>EASY</b><i>slow patrols · 4 losses allowed</i></button>
+      <button class="diff sel" data-d="1"><b>NORMAL</b><i>full squad · 3 losses allowed</i></button>
+      <button class="diff" data-d="2"><b>HARD</b><i>fast hunters · 2 losses allowed</i></button>
+    </div>
+
+    <button id="btnStart" class="big">DEPLOY</button>
+
+    <div class="keys">
+      <div><b>W A S D / ←↑→↓</b> drive</div>
+      <div><b>SPACE</b> shell &nbsp; <b>F / SHIFT</b> machine gun &nbsp; <b>E</b> mine</div>
+      <div class="touch-only"><b>LEFT THUMB</b> joystick · buttons on the right</div>
+    </div>
+    <div class="stencil-bottom">CITY · FOREST · DESERT — procedurally generated every drop</div>
+  </div>
+
+  <div class="crate hidden" id="screenLevel">
+    <div class="stencil-top" id="lvTop">SECTOR CLEARED</div>
+    <h2 id="lvTitle">LEVEL 2</h2>
+    <p class="brief" id="lvBrief"></p>
+    <button id="btnNext" class="big">ROLL OUT</button>
+  </div>
+
+  <div class="crate hidden" id="screenOver">
+    <div class="stencil-top hazard" id="ovTop">FIELD LOST</div>
+    <h2 id="ovTitle">DEFEAT</h2>
+    <p class="brief" id="ovBrief"></p>
+    <button id="btnRetry" class="big">RE-DEPLOY</button>
+  </div>
+</div>
+
+<script src="js/maze.js"></script>
+<script src="js/input.js"></script>
+<script src="js/entities.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>
