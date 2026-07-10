@@ -1,5 +1,5 @@
 'use strict';
-/* input.js — keyboard + touch (virtual joystick, FIRE / MG / MINE buttons)
+/* input.js — keyboard + touch (virtual joystick, FIRE / MINE buttons)
    plus mobile gesture lockdown so steering never scrolls / zooms / reloads. */
 
 var INPUT = (function () {
@@ -8,7 +8,7 @@ var INPUT = (function () {
   var touchMode = false;
 
   var joy = { active: false, id: -1, cx: 0, cy: 0, dx: 0, dy: 0, mag: 0, ang: 0 };
-  var btn = { fire: false, mg: false, mine: false };
+  var btn = { fire: false, mine: false };
   var mineEdge = false;   // consumed once per press
 
   /* ---------------- keyboard ---------------- */
@@ -21,7 +21,7 @@ var INPUT = (function () {
   window.addEventListener('keyup', function (e) { keys[e.code] = false; });
   function isGameKey(e) {
     return ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-            'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyE', 'ShiftLeft', 'ShiftRight'].indexOf(e.code) >= 0;
+            'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE'].indexOf(e.code) >= 0;
   }
 
   /* ---------------- gesture lockdown ---------------- */
@@ -93,7 +93,6 @@ var INPUT = (function () {
 
     /* buttons */
     bindHold('btnFire', 'fire');
-    bindHold('btnMG', 'mg');
     var bm = document.getElementById('btnMine');
     if (bm) {
       bm.addEventListener('touchstart', function (e) {
@@ -120,7 +119,7 @@ var INPUT = (function () {
     document.addEventListener('DOMContentLoaded', function () { document.body.classList.add('touch'); });
 
   /* ---------------- unified drive query ----------------
-     Returns { throttle, steer, fire, mg, mine } for the given hull angle.
+     Returns { throttle, steer, fire, mine } for the given hull angle.
      Touch joystick: point the stick where you want to go. */
   function getDrive(hullAngle) {
     var throttle = 0, steer = 0;
@@ -142,7 +141,6 @@ var INPUT = (function () {
     return {
       throttle: throttle, steer: steer,
       fire: !!(keys['Space'] || btn.fire),
-      mg: !!(keys['KeyF'] || keys['ShiftLeft'] || keys['ShiftRight'] || btn.mg),
       mine: mine
     };
   }

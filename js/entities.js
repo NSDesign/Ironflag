@@ -1,5 +1,5 @@
 'use strict';
-/* entities.js — Tank, Shell, Bullet, Mine + collision & line-of-sight helpers.
+/* entities.js — Tank, Shell, Turret, Mine + collision & line-of-sight helpers.
    DOM-free. All world interaction goes through the `game` facade passed into
    update(): game.speedMulAt, game.solidRectsNear, game.hedgehogs, game.spawnFX ... */
 
@@ -51,9 +51,8 @@ var ENT = (function () {
     this.hp = this.maxHp;
     this.baseSpeed = o.speed || 155;
     this.turnRate = o.turn || 3.0;
-    this.reload = o.reload || 1.0;      // seconds per shell
+    this.reload = o.reload || 0.4;      // seconds per shell
     this.reloadT = 0;
-    this.mgCd = 0;
     this.dmgMul = o.dmgMul || 1;
     this.dead = false;
     this.respawnT = 0;
@@ -126,6 +125,19 @@ var ENT = (function () {
         var g = hh[h];
         if (dist2(px, py, g.x, g.y) < (r + g.r) * (r + g.r)) return true;
       }
+      // trees — canopy is visual only; only the trunk blocks
+      var trs = game.trees;
+      for (var tr2 = 0; tr2 < trs.length; tr2++) {
+        var tre = trs[tr2];
+        if (dist2(px, py, tre.x, tre.y) < (r + tre.trunkR) * (r + tre.trunkR)) return true;
+      }
+      // stationary turrets — solid until destroyed
+      var turs = game.turrets;
+      for (var tu = 0; tu < turs.length; tu++) {
+        var turret = turs[tu];
+        if (turret.dead) continue;
+        if (dist2(px, py, turret.x, turret.y) < (r + turret.r) * (r + turret.r)) return true;
+      }
       return false;
     }
 
@@ -133,7 +145,7 @@ var ENT = (function () {
     if (!blockedAt(this.x, this.y + dy)) this.y += dy;
   };
 
-  /* ctrl: { throttle:-1..1, steer:-1..1, fire:bool, mg:bool, mine:bool(edge),
+  /* ctrl: { throttle:-1..1, steer:-1..1, fire:bool, mine:bool(edge),
              aim: absolute turret angle or null } */
   Tank.prototype.update = function (dt, game, ctrl) {
     if (this.dead) {
@@ -184,15 +196,10 @@ var ENT = (function () {
 
     // weapons
     this.reloadT = Math.max(0, this.reloadT - dt);
-    this.mgCd = Math.max(0, this.mgCd - dt);
     this.ramCd = Math.max(0, this.ramCd - dt);
     if (ctrl.fire && this.reloadT <= 0) {
       this.reloadT = this.reload;
       game.fireShell(this);
-    }
-    if (ctrl.mg && this.mgCd <= 0) {
-      this.mgCd = 0.095;
-      game.fireBullet(this);
     }
     if (ctrl.mine) game.dropMine(this);
 
@@ -255,43 +262,54 @@ var ENT = (function () {
           return;
         }
       }
+      // stationary turrets
+      var turs = game.turrets;
+      for (var tu = 0; tu < turs.length; tu++) {
+        var turret = turs[tu];
+        if (turret === this.owner || turret.dead) continue;
+        if (dist2(this.x, this.y, turret.x, turret.y) < (turret.r + 4) * (turret.r + 4)) {
+          this.dead = true;
+          game.explode(this.x, this.y, this.splash, this.dmg, this.owner, turret);
+          return;
+        }
+      }
     }
   };
 
-  /* ============================ BULLET (MG) ============================ */
-  function Bullet(owner, game) {
-    this.owner = owner; this.team = owner.team;
-    var spread = (game.rand() - 0.5) * 0.09;
-    var a = owner.turret + spread;
-    var mz = owner.r + 12;
-    this.x = owner.x + Math.cos(a) * mz;
-    this.y = owner.y + Math.sin(a) * mz;
-    this.vx = Math.cos(a) * 640; this.vy = Math.sin(a) * 640;
-    this.dmg = 4 * owner.dmgMul;
+  /* ============================ TURRET ============================ */
+  function Turret(o) {
+    this.x = o.x; this.y = o.y;
+    this.a = this.turret = o.a || 0;      // duck-types as a Shell owner
+    this.r = o.r || 17;
+    this.team = o.team;
+    this.dmgMul = o.dmgMul || 1;
+    this.maxHp = o.maxHp || 60;
+    this.hp = this.maxHp;
+    this.range = o.range || 480;
+    this.reload = o.reload || 1.6;
+    this.reloadT = 0.4;
+    this.turnRate = o.turnRate || 3.2;    // slower slew than a tank turret (6.5 rad/s)
     this.dead = false;
-    this.life = 1.4;
+    this.cellX = o.cellX; this.cellY = o.cellY;
   }
-  Bullet.prototype.update = function (dt, game) {
+  Turret.prototype.takeDamage = function (d, game, src) {
     if (this.dead) return;
-    this.life -= dt; if (this.life <= 0) { this.dead = true; return; }
-    var scratch = this._s || (this._s = []);
-    this.x += this.vx * dt; this.y += this.vy * dt;
-    if (this.x < 0 || this.y < 0 || this.x > game.maze.worldW || this.y > game.maze.worldH) { this.dead = true; return; }
-    var walls = game.maze.nearWalls(this.x, this.y, scratch);
-    for (var w = 0; w < walls.length; w++)
-      if (pointInRect(this.x, this.y, game.maze.wallRect(walls[w]))) {
-        this.dead = true; game.sparkFX(this.x, this.y); return;
-      }
-    var tanks = game.tanks;
-    for (var t = 0; t < tanks.length; t++) {
-      var tk = tanks[t];
-      if (tk === this.owner || tk.dead || tk.team === this.team) continue;
-      if (dist2(this.x, this.y, tk.x, tk.y) < (tk.r + 2) * (tk.r + 2)) {
-        this.dead = true;
-        tk.takeDamage(this.dmg, game, this.owner);
-        game.sparkFX(this.x, this.y);
-        return;
-      }
+    this.hp -= d;
+    if (this.hp <= 0) { this.hp = 0; game.killTurret(this, src); }
+  };
+  Turret.prototype.update = function (dt, game) {
+    if (this.dead) return;
+    this.reloadT = Math.max(0, this.reloadT - dt);
+    var target = game.turretTarget(this);
+    if (!target) return;
+    var want = Math.atan2(target.y - this.y, target.x - this.x);
+    var td = angDiff(this.turret, want);
+    var tspd = this.turnRate * dt;
+    this.turret += clamp(td, -tspd, tspd);
+    this.a = this.turret;
+    if (Math.abs(angDiff(this.turret, want)) < 0.1 && this.reloadT <= 0) {
+      this.reloadT = this.reload;
+      game.fireShell(this);
     }
   };
 
@@ -347,7 +365,7 @@ var ENT = (function () {
   };
 
   return {
-    Tank: Tank, Shell: Shell, Bullet: Bullet, Mine: Mine,
+    Tank: Tank, Shell: Shell, Turret: Turret, Mine: Mine,
     losClear: losClear, circleRect: circleRect, pointInRect: pointInRect,
     clamp: clamp, angDiff: angDiff, dist2: dist2, TAU: TAU
   };

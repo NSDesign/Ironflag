@@ -20,11 +20,13 @@ Levels cycle through three procedurally generated terrains, each with its own ma
 
 Every level brings more, faster, harder-hitting enemies. From level 4 onward you need **two** captures to clear a sector.
 
+Sealed compound buildings sit near each base — yours slide open automatically as you approach, the enemy's are barricaded shut and need shelling open. Gun turrets guard the enemy base and forest maps are dotted with trees you can duck under (but not drive through the trunk).
+
 ## Controls
 
-**Keyboard** — `WASD` / arrow keys to drive · `Space` fire shell · `F` or `Shift` (hold) machine gun · `E` drop a mine (max 4 armed at once).
+**Keyboard** — `WASD` / arrow keys to drive · `Space` fire missile · `E` drop a mine (max 4 armed at once).
 
-**Touch** — left-thumb virtual joystick to drive; FIRE / MG / MINE buttons on the right. The FIRE button's reload fills bottom-to-top, re-revealing the shell icon when ready. The MINE button shows your inventory as overlapping discs — every five collapse into an ammo box — with deployed mines trailing as outlines. The page locks out pull-to-refresh, overscroll and pinch/double-tap zoom.
+**Touch** — left-thumb virtual joystick to drive; FIRE / MINE buttons on the right. The FIRE button's reload fills bottom-to-top, re-revealing the missile icon when ready. The MINE button shows your inventory as overlapping discs — every five collapse into an ammo box — with deployed mines trailing as outlines. The page locks out pull-to-refresh, overscroll and pinch/double-tap zoom.
 
 ## Weapons and damage
 
@@ -32,8 +34,7 @@ Every level brings more, faster, harder-hitting enemies. From level 4 onward you
 |---|---|---|
 | Ramming | up to 50 | Scales with closing speed; hurts both tanks |
 | Mine | 45 | Arms after 1 s. Sits 60 s idle, then beeps for 10 s and self-detonates. Nearby mines chain. |
-| Shell | 25 + splash | 1 s reload; cracks weakened walls open in 1–3 hits |
-| Machine gun | 4/round | High rate, mild spread |
+| Missile | 25 + splash | Fast reload, near-limitless fire; cracks weakened walls open in 1–3 hits |
 
 Armor self-repairs a few seconds after the last hit. At zero, the tank explodes.
 
@@ -42,7 +43,9 @@ Armor self-repairs a few seconds after the last hit. At zero, the tank explodes.
 - **Mud / soft sand** — halves (or drags) your speed
 - **Barbed wire** — slows you; dense coils nearly trap a tank. Projectiles fly over.
 - **Czech hedgehogs** — stop tanks dead; projectiles pass through
+- **Trees** (forest) — the leafy canopy is passable and covers whoever's underneath, but the trunk stops a tank dead. Shells pass through either way.
 - **Weakened walls** — visibly cracked; crumble after 1–3 shell hits (the AI knows this too)
+- **Gun turrets** — stationary emplacements defending the enemy base. They rotate and fire on sight within range, take shell damage, and leave their cell driveable once destroyed.
 
 ## Special items
 
@@ -85,7 +88,7 @@ index.html                       shell, HUD, touch controls, overlays
 css/style.css                    stenciled military HUD styling
 js/maze.js                       procedural maze generation + pathfinding
 js/input.js                      keyboard, touch joystick, gesture lockout
-js/entities.js                   tanks, shells, bullets, mines
+js/entities.js                   tanks, shells, mines, turrets
 js/game.js                       game state, AI, CTF rules, rendering, audio
 assets/enemy-flag.svg            replaceable enemy flag artwork
 .github/workflows/deploy-pages.yml   auto-deploy to GitHub Pages

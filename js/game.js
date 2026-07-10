@@ -58,7 +58,6 @@
     return {
       ensure: ensure,
       shot: function () { noise(0.16, 0.5, 1400); tone('square', 150, 55, 0.14, 0.25); },
-      mg: function () { noise(0.05, 0.22, 2600); },
       boom: function (big) {
         noise(big ? 0.8 : 0.4, big ? 0.9 : 0.55, big ? 420 : 620);
         tone('sine', big ? 90 : 120, 30, big ? 0.7 : 0.4, big ? 0.5 : 0.3);
@@ -82,21 +81,27 @@
       floor: '#26292d', floorTone: '#2e3237',
       wallFill: '#4b5158', wallEdge: '#22262b', wallWeak: '#6d5849',
       mud: 2, wire: 16, denseWire: 5, hedgehogs: 24, sand: 0,
-      brief: 'Tight streets and crumbling blocks. Barbed wire chokes the lanes; hedgehog barricades seal the rest. Shell the cracked walls open.'
+      turrets: 2, turretBandMin: 2, turretBandMax: 4,
+      buildings: 3, buildingSizeMin: 2, buildingSizeMax: 3, buildingBandMin: 3, buildingBandMax: 7,
+      brief: 'Tight streets and crumbling blocks. Barbed wire chokes the lanes; hedgehog barricades seal the rest. Shell the cracked walls open — and watch for gun turrets guarding the enemy base.'
     },
     { key: 'forest', name: 'FOREST',
       cols: 21, rows: 17, braid: 0.3, weakProb: 0.06, river: true,
       floor: '#24331d', floorTone: '#2c3d23',
       wallFill: '#31491f', wallEdge: '#16230e', wallWeak: '#5c4a2c',
-      mud: 15, wire: 4, denseWire: 1, hedgehogs: 6, sand: 0,
-      brief: 'A river cuts the map in two — take a bridge, or vanish into the stone tunnel beneath it. Mind the bog; mud halves your speed.'
+      mud: 15, wire: 4, denseWire: 1, hedgehogs: 6, sand: 0, trees: 22,
+      turrets: 2, turretBandMin: 2, turretBandMax: 4,
+      buildings: 2, buildingSizeMin: 2, buildingSizeMax: 3, buildingBandMin: 3, buildingBandMax: 7,
+      brief: 'A river cuts the map in two — take a bridge, or vanish into the stone tunnel beneath it. Trees give cover but their trunks stop you dead. Mind the bog; mud halves your speed.'
     },
     { key: 'desert', name: 'DESERT',
       cols: 24, rows: 16, braid: 0.68, weakProb: 0.26, river: false,
       floor: '#b3915c', floorTone: '#c2a06a',
       wallFill: '#a06c46', wallEdge: '#6e4527', wallWeak: '#b98a5a',
       mud: 0, wire: 6, denseWire: 1, hedgehogs: 10, sand: 18,
-      brief: 'Open, looping dune runs. Soft sand drags at your tracks and the adobe walls barely hold — almost every route can be blasted open.'
+      turrets: 3, turretBandMin: 2, turretBandMax: 4,
+      buildings: 4, buildingSizeMin: 2, buildingSizeMax: 3, buildingBandMin: 3, buildingBandMax: 7,
+      brief: 'Open, looping dune runs. Soft sand drags at your tracks and the adobe walls barely hold — almost every route can be blasted open. Gun turrets ring the enemy base.'
     }
   ];
 
@@ -112,10 +117,11 @@
     level: 1, time: 0, freezeT: 0,
     maze: null, theme: THEMES[0],
     tanks: [], player: null,
-    shells: [], bullets: [], mines: [], items: [],
+    shells: [], mines: [], items: [],
     fx: [], tracks: [], firePatches: [], bombs: [], strafes: [],
     plane: null,
-    mud: [], wire: [], hedgehogs: [], sand: [],
+    mud: [], wire: [], hedgehogs: [], sand: [], trees: [], turrets: [],
+    buildings: [], doors: [],
     flags: null, pads: null,
     playerCaps: 0, enemyCaps: 0, capsNeeded: 1,
     itemSpawnT: 6,
@@ -176,11 +182,23 @@
     };
 
     /* ---- place terrain features on safe floor cells ---- */
-    G.mud = []; G.wire = []; G.hedgehogs = []; G.sand = [];
+    G.mud = []; G.wire = []; G.hedgehogs = []; G.sand = []; G.trees = [];
     var rng = m.rng;
     function farFromBases(cxl, cyl) {
       return (Math.abs(cxl - baseP.x) + Math.abs(cyl - baseP.y)) > 3 &&
              (Math.abs(cxl - baseE.x) + Math.abs(cyl - baseE.y)) > 3;
+    }
+    /* hard exclusion for base-clustering placement (buildings/turrets): the
+       exact base pad cell + the enemy spawn cluster, regardless of distance
+       band — this is the opposite intent from farFromBases() above, so it's
+       its own predicate rather than reusing/inverting that one. */
+    function nearBaseCore(cxl, cyl) {
+      if ((cxl === baseP.x && cyl === baseP.y) || (cxl === baseE.x && cyl === baseE.y)) return true;
+      for (var ei = 0; ei < 4; ei++) {
+        var ox = clamp(baseE.x - (ei % 2), 0, m.cols - 1), oy = clamp(baseE.y + ((ei / 2) | 0) % 2, 0, m.rows - 1);
+        if (cxl === ox && cyl === oy) return true;
+      }
+      return false;
     }
     function pickCell(pred) {
       for (var t = 0; t < 200; t++) {
@@ -191,6 +209,28 @@
         if (!farFromBases(x, y)) continue;
         if (G.blockedCells.has(cellKey(x, y))) continue;
         if (pred && !pred(x, y, c)) continue;
+        return { x: x, y: y };
+      }
+      return null;
+    }
+    /* rejection-sample a cell within [bandMin,bandMax] Manhattan cells of
+       (cxTarget,cyTarget) — used to cluster buildings/turrets near a base,
+       the inverse of pickCell's farFromBases exclusion. Sampled directly in
+       Manhattan (dx,dy) space — not polar/Euclidean then distance-filtered —
+       so every draw lands exactly on the target ring instead of wasting most
+       attempts on angles that round to the wrong Manhattan distance. */
+    function pickNearBase(cxTarget, cyTarget, bandMin, bandMax) {
+      for (var t = 0; t < 200; t++) {
+        var d = bandMin + ((rng() * (bandMax - bandMin + 1)) | 0);
+        var dx = ((rng() * (2 * d + 1)) | 0) - d;
+        var dy = (rng() < 0.5 ? 1 : -1) * (d - Math.abs(dx));
+        var x = cxTarget + dx, y = cyTarget + dy;
+        if (x < 0 || y < 0 || x >= m.cols || y >= m.rows) continue;
+        var c = m.cell(x, y);
+        if (c.water || c.tunnel || c.bridge) continue;
+        if (theme.river && Math.abs(y - m.riverRow) <= 1) continue;
+        if (nearBaseCore(x, y)) continue;
+        if (G.blockedCells.has(cellKey(x, y))) continue;
         return { x: x, y: y };
       }
       return null;
@@ -235,12 +275,162 @@
       G.hedgehogs.push({ x: wc.x + (rng() - 0.5) * 14, y: wc.y + (rng() - 0.5) * 14, r: 11,
         a: rng() * TAU, cx: c2.x, cy: c2.y });
     }
+    for (i = 0; i < (theme.trees || 0); i++) {
+      c2 = pickCell(function (x, y) { return !G.blockedCells.has(cellKey(x, y)); });
+      if (!c2) break;
+      wc = m.center(c2.x, c2.y);
+      G.blockedCells.add(cellKey(c2.x, c2.y));
+      if (!m.findPath(baseP.x, baseP.y, baseE.x, baseE.y, false)) {
+        G.blockedCells.delete(cellKey(c2.x, c2.y));
+        continue;
+      }
+      G.trees.push({
+        x: wc.x + (rng() - 0.5) * 14, y: wc.y + (rng() - 0.5) * 14,
+        trunkR: 8, canopyR: 26 + rng() * 8,
+        cx: c2.x, cy: c2.y, seed: (rng() * 1e9) | 0
+      });
+    }
+
+    /* ---- turrets: enemy-base defense only, stats scale with difficulty ---- */
+    G.turrets = [];
+    var turretHp = [50, 65, 85][G.diffIx];
+    var turretReload = [2.0, 1.5, 1.1][G.diffIx];
+    var turretRange = [420, 480, 540][G.diffIx];
+    for (i = 0; i < (theme.turrets || 0); i++) {
+      c2 = pickNearBase(baseE.x, baseE.y, theme.turretBandMin || 2, theme.turretBandMax || 6);
+      if (!c2) break;
+      wc = m.center(c2.x, c2.y);
+      G.blockedCells.add(cellKey(c2.x, c2.y));
+      if (!m.findPath(baseP.x, baseP.y, baseE.x, baseE.y, false)) {
+        G.blockedCells.delete(cellKey(c2.x, c2.y));
+        continue;
+      }
+      G.turrets.push(new ENT.Turret({
+        x: wc.x, y: wc.y, a: rng() * TAU, team: 'E',
+        maxHp: turretHp, reload: turretReload, range: turretRange,
+        cellX: c2.x, cellY: c2.y
+      }));
+    }
+
+    /* ---- buildings + doors: sealed multi-cell structures near each base.
+       Player-side buildings get an automatic (proximity) door; enemy-side
+       buildings get a destructible barricade door reusing the ordinary
+       weak-wall mechanic. Footprints keep a 1-cell margin off the map edge
+       so every touched wall is an interior (non-boundary) wall. ---- */
+    G.buildings = []; G.doors = [];
+    var buildingIdSeq = 0, doorIdSeq = 0;
+    function placeBuildings(teamKey, targetBase, count) {
+      for (var n = 0; n < count; n++) {
+        var placedOne = false;
+        for (var attempt = 0; attempt < 60 && !placedOne; attempt++) {
+          var sizeMin = theme.buildingSizeMin || 2, sizeMax = theme.buildingSizeMax || 3;
+          var bw = sizeMin + ((rng() * (sizeMax - sizeMin + 1)) | 0);
+          var bh = sizeMin + ((rng() * (sizeMax - sizeMin + 1)) | 0);
+          var anchor = pickNearBase(targetBase.x, targetBase.y, theme.buildingBandMin || 2, theme.buildingBandMax || 5);
+          if (!anchor) continue;
+          var cx0 = clamp(anchor.x - ((bw / 2) | 0), 1, Math.max(1, m.cols - 1 - bw));
+          var cy0 = clamp(anchor.y - ((bh / 2) | 0), 1, Math.max(1, m.rows - 1 - bh));
+          if (cx0 < 1 || cy0 < 1 || cx0 + bw > m.cols - 1 || cy0 + bh > m.rows - 1) continue;
+
+          var cellsOk = true;
+          for (var fx = cx0; fx < cx0 + bw && cellsOk; fx++) {
+            for (var fy = cy0; fy < cy0 + bh && cellsOk; fy++) {
+              var fc = m.cell(fx, fy);
+              if (fc.water || fc.tunnel || fc.bridge) cellsOk = false;
+              if (G.blockedCells.has(cellKey(fx, fy))) cellsOk = false;
+              if (nearBaseCore(fx, fy)) cellsOk = false;
+            }
+          }
+          if (!cellsOk) continue;
+
+          // gather every interior + perimeter wall of the footprint, and
+          // every perimeter edge that's a viable door (leads to an open,
+          // unblocked, in-bounds cell outside the building)
+          var touched = [], doorCandidates = [];
+          for (var gx = cx0; gx < cx0 + bw; gx++) {
+            for (var gy = cy0; gy < cy0 + bh; gy++) {
+              if (gx + 1 < cx0 + bw) touched.push(m.wallBetween(gx, gy, gx + 1, gy));
+              if (gy + 1 < cy0 + bh) touched.push(m.wallBetween(gx, gy, gx, gy + 1));
+              var nbrs = [[gx - 1, gy], [gx + 1, gy], [gx, gy - 1], [gx, gy + 1]];
+              for (var nb = 0; nb < 4; nb++) {
+                var nx = nbrs[nb][0], ny = nbrs[nb][1];
+                var inside = nx >= cx0 && nx < cx0 + bw && ny >= cy0 && ny < cy0 + bh;
+                if (inside) continue;
+                var pw = m.wallBetween(gx, gy, nx, ny);
+                touched.push(pw);
+                if (m.inB(nx, ny)) {
+                  var oc = m.cell(nx, ny);
+                  if (!oc.water && !oc.tunnel && !oc.bridge && !G.blockedCells.has(cellKey(nx, ny)))
+                    doorCandidates.push(pw);
+                }
+              }
+            }
+          }
+          if (!doorCandidates.length) continue;
+          var doorWall = doorCandidates[(rng() * doorCandidates.length) | 0];
+
+          // snapshot every touched wall so a failed connectivity check can roll back
+          var snapshot = [];
+          for (var si = 0; si < touched.length; si++)
+            snapshot.push({ w: touched[si], alive: touched[si].alive, weak: touched[si].weak });
+          for (var ti = 0; ti < touched.length; ti++) {
+            if (touched[ti] === doorWall) continue;
+            touched[ti].alive = true; touched[ti].weak = false;
+          }
+          doorWall.alive = false; // simulate "door open" for the connectivity check
+          var pathOk = !!m.findPath(baseP.x, baseP.y, baseE.x, baseE.y, false);
+          doorWall.alive = true;  // doors start closed either way
+
+          if (!pathOk) {
+            for (var ri = 0; ri < snapshot.length; ri++) {
+              snapshot[ri].w.alive = snapshot[ri].alive; snapshot[ri].w.weak = snapshot[ri].weak;
+            }
+            continue;
+          }
+
+          // commit
+          var buildingId = 'b' + (buildingIdSeq++);
+          for (var cx1 = cx0; cx1 < cx0 + bw; cx1++)
+            for (var cy1 = cy0; cy1 < cy0 + bh; cy1++)
+              G.blockedCells.add(cellKey(cx1, cy1));
+          for (var tj = 0; tj < touched.length; tj++)
+            if (touched[tj] !== doorWall) touched[tj].building = buildingId;
+
+          var isAuto = teamKey === 'P';
+          if (isAuto) {
+            doorWall.weak = false;
+          } else {
+            doorWall.weak = true;
+            doorWall.maxHp = 2 + ((rng() * 2) | 0);
+            doorWall.hp = doorWall.maxHp;
+          }
+          var doorRect = m.wallRect(doorWall);
+          var doorRec = {
+            id: 'd' + (doorIdSeq++), wall: doorWall,
+            x: doorRect.x + doorRect.w / 2, y: doorRect.y + doorRect.h / 2,
+            auto: isAuto, open: false, openT: 0, triggerR: 70
+          };
+          doorWall.isDoor = doorRec;
+          G.doors.push(doorRec);
+          G.buildings.push({
+            id: buildingId, team: teamKey,
+            cellX: cx0, cellY: cy0, cols: bw, rows: bh,
+            x: cx0 * m.CELL, y: cy0 * m.CELL, w: bw * m.CELL, h: bh * m.CELL,
+            doorId: doorRec.id, roofSeed: (rng() * 1e9) | 0
+          });
+          placedOne = true;
+        }
+      }
+    }
+    var buildingTotal = theme.buildings || 0;
+    placeBuildings('P', baseP, Math.ceil(buildingTotal / 2));
+    placeBuildings('E', baseE, Math.floor(buildingTotal / 2));
 
     /* ---- tanks ---- */
     G.tanks = [];
     var pT = new ENT.Tank({
       team: 'P', isPlayer: true, x: pc.x, y: pc.y, a: -Math.PI / 4,
-      maxHp: G.diff.hp, speed: 165, turn: 3.2, reload: 1.0, dmgMul: 1
+      maxHp: G.diff.hp, speed: 165, turn: 3.2, reload: 0.4, dmgMul: 1
     });
     G.player = pT; G.tanks.push(pT);
 
@@ -261,7 +451,7 @@
     }
 
     /* ---- clear the field ---- */
-    G.shells = []; G.bullets = []; G.mines = []; G.items = [];
+    G.shells = []; G.mines = []; G.items = [];
     G.fx = []; G.tracks = []; G.firePatches = []; G.bombs = []; G.strafes = [];
     G.plane = null; G.itemSpawnT = 6;
 
@@ -277,7 +467,7 @@
     }
     G.flags.P.carrier = null; G.flags.P.x = G.flags.P.home.x; G.flags.P.y = G.flags.P.home.y; G.flags.P.dropT = 0;
     G.flags.E.carrier = null; G.flags.E.x = G.flags.E.home.x; G.flags.E.y = G.flags.E.home.y; G.flags.E.dropT = 0;
-    G.shells = []; G.bullets = []; G.mines = []; G.items = [];
+    G.shells = []; G.mines = []; G.items = [];
     G.fx = []; G.firePatches = []; G.bombs = []; G.strafes = []; G.plane = null;
     G.itemSpawnT = 5;
     G.freezeT = 1.5;
@@ -445,6 +635,61 @@
       b.restore();
     }
 
+    /* trees — trunk baked on the base layer (hard collision), leafy canopy
+       baked on the OVER layer so it re-covers tanks passing underneath every
+       frame, same trick as the tunnel roof above. */
+    for (i = 0; i < G.trees.length; i++) {
+      var tre2 = G.trees[i];
+      var trng = MAZE.mulberry32(tre2.seed);
+      b.save(); b.translate(tre2.x, tre2.y);
+      b.fillStyle = '#2a1f12';
+      b.beginPath(); b.arc(0, 0, tre2.trunkR, 0, TAU); b.fill();
+      b.strokeStyle = 'rgba(0,0,0,.4)'; b.lineWidth = 1.5;
+      b.beginPath(); b.arc(0, 0, tre2.trunkR, 0, TAU); b.stroke();
+      b.restore();
+
+      o.save(); o.translate(tre2.x, tre2.y);
+      o.fillStyle = 'rgba(30,20,10,.35)';
+      o.beginPath(); o.arc(2, 3, tre2.canopyR, 0, TAU); o.fill();     // ground shadow
+      var cg = o.createRadialGradient(-tre2.canopyR * 0.3, -tre2.canopyR * 0.3, 2, 0, 0, tre2.canopyR);
+      cg.addColorStop(0, '#5f8f3e'); cg.addColorStop(1, '#294f1c');
+      o.fillStyle = cg;
+      o.beginPath(); o.arc(0, 0, tre2.canopyR, 0, TAU); o.fill();
+      o.fillStyle = 'rgba(90,150,60,.5)';
+      for (var lf = 0; lf < 10; lf++) {
+        var lfa = trng() * TAU, lfr = trng() * tre2.canopyR * 0.75;
+        o.beginPath(); o.arc(Math.cos(lfa) * lfr, Math.sin(lfa) * lfr, 3 + trng() * 3, 0, TAU); o.fill();
+      }
+      o.strokeStyle = 'rgba(0,0,0,.25)'; o.lineWidth = 1.5;
+      o.beginPath(); o.arc(0, 0, tre2.canopyR, 0, TAU); o.stroke();
+      o.restore();
+    }
+
+    /* buildings — solid sealed structures with roof/window dressing, baked
+       once (their walls are excluded from the live drawWalls() pass). */
+    for (i = 0; i < G.buildings.length; i++) {
+      var bd = G.buildings[i];
+      var brng = MAZE.mulberry32(bd.roofSeed);
+      var roofCol = bd.team === 'P' ? '#3f5a3a' : '#5a3f32';
+      var roofEdge = bd.team === 'P' ? '#233420' : '#33231b';
+      b.fillStyle = roofCol;
+      b.fillRect(bd.x, bd.y, bd.w, bd.h);
+      b.strokeStyle = roofEdge; b.lineWidth = 3;
+      b.strokeRect(bd.x + 1.5, bd.y + 1.5, bd.w - 3, bd.h - 3);
+      b.fillStyle = 'rgba(0,0,0,.22)';
+      for (var wy4 = 0; wy4 < bd.rows; wy4++) {
+        for (var wx4 = 0; wx4 < bd.cols; wx4++) {
+          if (brng() < 0.55)
+            b.fillRect(bd.x + wx4 * C + C * 0.28, bd.y + wy4 * C + C * 0.28, C * 0.44, C * 0.44);
+        }
+      }
+      b.strokeStyle = 'rgba(0,0,0,.3)'; b.lineWidth = 2;
+      b.beginPath();
+      if (bd.w >= bd.h) { b.moveTo(bd.x, bd.y + bd.h / 2); b.lineTo(bd.x + bd.w, bd.y + bd.h / 2); }
+      else { b.moveTo(bd.x + bd.w / 2, bd.y); b.lineTo(bd.x + bd.w / 2, bd.y + bd.h); }
+      b.stroke();
+    }
+
     /* base pads */
     drawPad(b, G.pads.P, '#3f8a4a', '#83d489');
     drawPad(b, G.pads.E, '#95352a', '#e06a52');
@@ -491,11 +736,6 @@
     AU.shot();
     if (tank.isPlayer) G.shake = Math.min(6, G.shake + 2.4);
   };
-  G.fireBullet = function (tank) {
-    G.bullets.push(new ENT.Bullet(tank, G));
-    muzzleFX(tank, 0.45);
-    AU.mg();
-  };
   G.dropMine = function (tank) {
     if (!tank.isPlayer) return;
     var active = 0;
@@ -527,6 +767,17 @@
       if (e.team === t.team || e.dead || e.hidden) continue;
       var d = dist2(t.x, t.y, e.x, e.y);
       if (d < bd && d < 620 * 620 && ENT.losClear(G, t.x, t.y, e.x, e.y)) { bd = d; best = e; }
+    }
+    return best;
+  };
+
+  G.turretTarget = function (tu) {
+    var best = null, bd = Infinity;
+    for (var i = 0; i < G.tanks.length; i++) {
+      var e = G.tanks[i];
+      if (e.team === tu.team || e.dead || e.hidden) continue;
+      var d = dist2(tu.x, tu.y, e.x, e.y);
+      if (d < bd && d < tu.range * tu.range && ENT.losClear(G, tu.x, tu.y, e.x, e.y)) { bd = d; best = e; }
     }
     return best;
   };
@@ -566,6 +817,15 @@
         t.takeDamage(dmg * f * 0.65, G, owner);
       }
     }
+    for (var ti = 0; ti < G.turrets.length; ti++) {
+      var tur = G.turrets[ti];
+      if (tur.dead || tur === directHit) continue;
+      var dt2 = Math.sqrt(dist2(x, y, tur.x, tur.y));
+      if (dt2 < radius + tur.r) {
+        var ft = 1 - Math.max(0, dt2 - tur.r) / radius;
+        tur.takeDamage(dmg * ft * 0.65, G, owner);
+      }
+    }
     // chip weak walls caught in the blast
     var walls = G.maze.nearWalls(x, y);
     for (var w = 0; w < walls.length; w++) {
@@ -601,6 +861,19 @@
     addFx({ type: 'wreck', x: t.x, y: t.y, a: t.a, life: t.respawnT, max: t.respawnT, pcol: t.isPlayer });
     AU.boom(true);
     if (t.isPlayer) { G.shake = 13; showBanner('TANK DESTROYED', 1100); }
+  };
+
+  G.killTurret = function (tu) {
+    if (tu.dead) return;
+    tu.dead = true;
+    addFx({ type: 'boom', x: tu.x, y: tu.y, r: 40, life: 0.5, max: 0.5 });
+    for (var p = 0; p < 20; p++) {
+      var an = Math.random() * TAU, sp = 40 + Math.random() * 180;
+      addFx({ type: 'p', x: tu.x, y: tu.y, vx: Math.cos(an) * sp, vy: Math.sin(an) * sp,
+        life: 0.4 + Math.random() * 0.6, max: 1, col: p < 8 ? '#ffcf6a' : '#484848', sz: 2 + Math.random() * 3 });
+    }
+    AU.boom(false);
+    G.blockedCells.delete(cellKey(tu.cellX, tu.cellY));
   };
 
   function muzzleFX(tank, scale) {
@@ -812,7 +1085,7 @@
   /* ============================ ENEMY AI ============================ */
   function aiControl(t, dt) {
     var ai = t.ai, m = G.maze, pl = G.player;
-    var ctrl = { throttle: 0, steer: 0, fire: false, mg: false, mine: false, aim: null };
+    var ctrl = { throttle: 0, steer: 0, fire: false, mine: false, aim: null };
     if (t.dead) return ctrl;
 
     var myCell = m.cellOf(t.x, t.y);
@@ -911,7 +1184,6 @@
       var ad = Math.abs(angDiff(t.turret, ctrl.aim));
       var d2 = dist2(t.x, t.y, pl.x, pl.y);
       if (ad < 0.14 && d2 < 520 * 520) ctrl.fire = true;
-      if (ad < 0.3 && d2 < 200 * 200) ctrl.mg = true;
       if (!t.carrying && reason !== 'steal' && d2 < 260 * 260 && ctrl.throttle > 0.5)
         ctrl.throttle = 0.55;                              // don't just faceplant into the player
     }
@@ -1030,16 +1302,36 @@
       t.update(dt, G, aiControl(t, dt));
     }
 
+    for (var tu3 = 0; tu3 < G.turrets.length; tu3++) G.turrets[tu3].update(dt, G);
+
     ramCheck(dt);
 
     for (i = G.shells.length - 1; i >= 0; i--) { G.shells[i].update(dt, G); if (G.shells[i].dead) G.shells.splice(i, 1); }
-    for (i = G.bullets.length - 1; i >= 0; i--) { G.bullets[i].update(dt, G); if (G.bullets[i].dead) G.bullets.splice(i, 1); }
     for (i = G.mines.length - 1; i >= 0; i--) { G.mines[i].update(dt, G); if (G.mines[i].dead) G.mines.splice(i, 1); }
 
     updateItems(dt);
     updatePlane(dt);
     updateBombsAndFire(dt);
     updateFlags(dt);
+    updateDoors(dt);
+  }
+
+  /* automatic doors slide open for any nearby tank; barricade doors need no
+     per-frame logic — they're driven entirely by shellHitsWall() below. */
+  function updateDoors(dt) {
+    for (var i = 0; i < G.doors.length; i++) {
+      var d = G.doors[i];
+      if (!d.auto) continue;
+      var near = false;
+      for (var j = 0; j < G.tanks.length; j++) {
+        var tk = G.tanks[j];
+        if (tk.dead) continue;
+        if (dist2(tk.x, tk.y, d.x, d.y) < d.triggerR * d.triggerR) { near = true; break; }
+      }
+      d.openT = clamp(d.openT + (near ? 1 : -1) * dt * 2.2, 0, 1);
+      d.open = d.openT > 0.5;
+      d.wall.alive = !d.open;
+    }
   }
 
   /* ============================ RENDER ============================ */
@@ -1056,12 +1348,32 @@
     return { scale: scale, x: cxr - vw / 2, y: cyr - vh / 2, vw: vw, vh: vh };
   }
 
+  /* cracks — deeper as hp drops. Shared by ordinary weak walls and barricade
+     doors so both render identically. */
+  function drawWeakCracks(r, w) {
+    var seed = (w.gx * 73 + w.gy * 131 + (w.vert ? 7 : 0));
+    cx.strokeStyle = 'rgba(20,12,8,.75)'; cx.lineWidth = 1.4;
+    var cracks = 1 + (w.maxHp - w.hp) * 2 + (seed % 2);
+    for (var cnum = 0; cnum < cracks; cnum++) {
+      var sxr = r.x + ((seed * (cnum + 2) * 31) % Math.max(1, r.w));
+      var syr = r.y + ((seed * (cnum + 3) * 19) % Math.max(1, r.h));
+      cx.beginPath(); cx.moveTo(sxr, syr);
+      cx.lineTo(sxr + (((seed + cnum) % 7) - 3) * 3, syr + (((seed + cnum) % 5) - 2) * 4);
+      cx.lineTo(sxr + (((seed + cnum) % 5) - 2) * 5, syr + (((seed + cnum) % 9) - 4) * 3);
+      cx.stroke();
+    }
+    cx.strokeStyle = 'rgba(255,210,120,.28)';
+    cx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+  }
+
   function drawWalls(cam) {
     var m = G.maze, th = G.theme;
     var x0 = cam.x - 40, y0 = cam.y - 40, x1 = cam.x + cam.vw + 40, y1 = cam.y + cam.vh + 40;
     var walls = m.allWalls();
     for (var i = 0; i < walls.length; i++) {
-      var w = walls[i], r = m.wallRect(w);
+      var w = walls[i];
+      if (w.building || w.isDoor) continue;   // buildings/doors render themselves
+      var r = m.wallRect(w);
       if (r.x + r.w < x0 || r.x > x1 || r.y + r.h < y0 || r.y > y1) continue;
       var seed = (w.gx * 73 + w.gy * 131 + (w.vert ? 7 : 0));
       cx.fillStyle = w.weak ? th.wallWeak : th.wallFill;
@@ -1086,19 +1398,39 @@
           cx.beginPath(); cx.arc(lx, ly, 4, 0, TAU); cx.fill();
         }
       }
-      if (w.weak) {   // cracks — deeper as hp drops
-        cx.strokeStyle = 'rgba(20,12,8,.75)'; cx.lineWidth = 1.4;
-        var cracks = 1 + (w.maxHp - w.hp) * 2 + (seed % 2);
-        for (var cnum = 0; cnum < cracks; cnum++) {
-          var sxr = r.x + ((seed * (cnum + 2) * 31) % Math.max(1, r.w));
-          var syr = r.y + ((seed * (cnum + 3) * 19) % Math.max(1, r.h));
-          cx.beginPath(); cx.moveTo(sxr, syr);
-          cx.lineTo(sxr + (((seed + cnum) % 7) - 3) * 3, syr + (((seed + cnum) % 5) - 2) * 4);
-          cx.lineTo(sxr + (((seed + cnum) % 5) - 2) * 5, syr + (((seed + cnum) % 9) - 4) * 3);
-          cx.stroke();
+      if (w.weak) drawWeakCracks(r, w);
+    }
+  }
+
+  function drawDoors(cam) {
+    var x0 = cam.x - 40, y0 = cam.y - 40, x1 = cam.x + cam.vw + 40, y1 = cam.y + cam.vh + 40;
+    for (var i = 0; i < G.doors.length; i++) {
+      var d = G.doors[i];
+      var r = G.maze.wallRect(d.wall);
+      if (r.x + r.w < x0 || r.x > x1 || r.y + r.h < y0 || r.y > y1) continue;
+      if (d.auto) {
+        cx.save();
+        cx.fillStyle = '#8a8f76';
+        cx.strokeStyle = '#3a3d30'; cx.lineWidth = 2;
+        if (d.wall.vert) {
+          var halfH = r.h / 2 * (1 - d.openT * 0.92);
+          cx.fillRect(r.x, r.y, r.w, halfH); cx.strokeRect(r.x, r.y, r.w, halfH);
+          cx.fillRect(r.x, r.y + r.h - halfH, r.w, halfH); cx.strokeRect(r.x, r.y + r.h - halfH, r.w, halfH);
+        } else {
+          var halfW = r.w / 2 * (1 - d.openT * 0.92);
+          cx.fillRect(r.x, r.y, halfW, r.h); cx.strokeRect(r.x, r.y, halfW, r.h);
+          cx.fillRect(r.x + r.w - halfW, r.y, halfW, r.h); cx.strokeRect(r.x + r.w - halfW, r.y, halfW, r.h);
         }
-        cx.strokeStyle = 'rgba(255,210,120,.28)';
-        cx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+        cx.fillStyle = d.open ? '#7cc97f' : '#c8452c';
+        cx.beginPath(); cx.arc(r.x + r.w / 2, r.y + r.h / 2, 2.4, 0, TAU); cx.fill();
+        cx.restore();
+      } else {
+        if (!d.wall.alive) continue;   // breached — nothing left to draw
+        cx.fillStyle = '#6a4a28';
+        cx.fillRect(r.x, r.y, r.w, r.h);
+        cx.strokeStyle = '#2c1c0c'; cx.lineWidth = 2;
+        cx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+        drawWeakCracks(r, d.wall);
       }
     }
   }
@@ -1191,6 +1523,38 @@
       cx.fillRect(t.x - w2 / 2, t.y - t.r - 12, w2, 4);
       cx.fillStyle = p > 0.5 ? '#7cc97f' : (p > 0.25 ? '#f0a83c' : '#c8452c');
       cx.fillRect(t.x - w2 / 2, t.y - t.r - 12, w2 * p, 4);
+    }
+  }
+
+  function drawTurret(tu) {
+    cx.save();
+    cx.translate(tu.x, tu.y);
+    cx.fillStyle = 'rgba(0,0,0,.3)';
+    cx.beginPath(); cx.ellipse(2, 3, tu.r + 3, tu.r, 0, 0, TAU); cx.fill();
+    // fixed concrete emplacement base
+    cx.fillStyle = '#5a5a52';
+    cx.beginPath(); cx.arc(0, 0, tu.r, 0, TAU); cx.fill();
+    cx.strokeStyle = '#2c2c26'; cx.lineWidth = 2.4;
+    cx.beginPath(); cx.arc(0, 0, tu.r, 0, TAU); cx.stroke();
+    for (var sb = 0; sb < 8; sb++) {
+      var sa = sb / 8 * TAU;
+      cx.fillStyle = 'rgba(0,0,0,.22)';
+      cx.beginPath(); cx.arc(Math.cos(sa) * tu.r * 0.68, Math.sin(sa) * tu.r * 0.68, 2.4, 0, TAU); cx.fill();
+    }
+    // rotating gun
+    cx.rotate(tu.turret);
+    cx.fillStyle = '#3a3a32';
+    cx.fillRect(tu.r * 0.1, -2.8, tu.r + 10, 5.6);
+    cx.fillStyle = '#6d6d62';
+    cx.beginPath(); cx.arc(0, 0, tu.r * 0.5, 0, TAU); cx.fill();
+    cx.strokeStyle = '#232320'; cx.lineWidth = 2; cx.stroke();
+    cx.restore();
+    if (tu.hp < tu.maxHp - 1) {
+      var w3 = 26, p2 = tu.hp / tu.maxHp;
+      cx.fillStyle = 'rgba(0,0,0,.55)';
+      cx.fillRect(tu.x - w3 / 2, tu.y - tu.r - 12, w3, 4);
+      cx.fillStyle = p2 > 0.5 ? '#7cc97f' : (p2 > 0.25 ? '#f0a83c' : '#c8452c');
+      cx.fillRect(tu.x - w3 / 2, tu.y - tu.r - 12, w3 * p2, 4);
     }
   }
 
@@ -1401,8 +1765,13 @@
     drawFlag(G.flags.E, true);
 
     drawWalls(cam);
+    drawDoors(cam);
 
     for (var it2 = 0; it2 < G.items.length; it2++) drawItem(G.items[it2]);
+
+    for (var tu4 = 0; tu4 < G.turrets.length; tu4++) {
+      if (!G.turrets[tu4].dead) drawTurret(G.turrets[tu4]);
+    }
 
     // tanks (tunnel-hidden ones are skipped; roofs go on top anyway)
     for (var tk3 = 0; tk3 < G.tanks.length; tk3++) {
@@ -1421,11 +1790,6 @@
       cx.fillStyle = 'rgba(255,180,80,.4)';
       cx.fillRect(-14, -1.4, 8, 2.8);
       cx.restore();
-    }
-    cx.fillStyle = '#ffe9b0';
-    for (var bl = 0; bl < G.bullets.length; bl++) {
-      var b3 = G.bullets[bl];
-      cx.fillRect(b3.x - 1.6, b3.y - 1.6, 3.2, 3.2);
     }
 
     drawFx();
@@ -1544,17 +1908,6 @@
       c.beginPath(); c.arc(W / 2, H / 2, W / 2 - 5, 0, TAU); c.stroke();
     }
   }
-  function drawMGBtn() {
-    var el = document.querySelector('#btnMG canvas');
-    if (!el || el._done) return;
-    el._done = true;
-    var c = el.getContext('2d'), W = el.width, H = el.height;
-    c.strokeStyle = 'rgba(230,224,207,.8)'; c.lineWidth = 3; c.lineCap = 'round';
-    c.beginPath(); c.moveTo(W * 0.24, H * 0.62); c.lineTo(W * 0.78, H * 0.34); c.stroke();
-    c.beginPath(); c.moveTo(W * 0.4, H * 0.66); c.lineTo(W * 0.46, H * 0.5); c.stroke();
-    c.fillStyle = 'rgba(230,224,207,.8)';
-    c.fillRect(W * 0.3, H * 0.52, 8, 5);
-  }
   var touchHudT = 0;
   function updateTouchHud(dt) {
     if (!INPUT.isTouch()) return;
@@ -1562,7 +1915,6 @@
     if (touchHudT > 0) return;
     touchHudT = 0.08;
     drawFireBtn();
-    drawMGBtn();
     drawMineHud(document.querySelector('#btnMine canvas'));
   }
 
